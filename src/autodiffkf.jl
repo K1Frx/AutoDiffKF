@@ -1,7 +1,7 @@
 module Autodiffkf
-import Base: +, -, *, /, exp, log, tanh
+import Base: +, -, *, /, exp, log, tanh, min, max
 
-export Variable, ReadableVariable, +, -, *, /, exp, log, relu, sigmoid, tanh, softmax
+export Variable, ReadableVariable, +, -, *, /, min, max, exp, log, relu, sigmoid, tanh, softmax
 export zero_grad!, backward, print_gradients
 
 mutable struct Variable
@@ -9,22 +9,24 @@ mutable struct Variable
     grad::Float64
     parents::Vector{Any}
     op_type::Symbol
+    m::Float64
+    v::Float64
 end
 
 function Variable(value::Float64)
-    return Variable(value, 0.0, [], :none)
+    return Variable(value, 0.0, [], :none, 0.0, 0.0)
 end
 
 function Variable(value::Float32)
-    return Variable(Float64(value), 0.0, [], :none)
+    return Variable(Float64(value), 0.0, [], :none, 0.0, 0.0)
 end
 
 function Variable(value::Int)
-    return Variable(Float64(value), 0.0, [], :none)
+    return Variable(Float64(value), 0.0, [], :none, 0.0, 0.0)
 end
 
 function Variable(value::Float64, symbol::Symbol)
-    return Variable(value, 0.0, [], symbol)
+    return Variable(value, 0.0, [], symbol, 0.0, 0.0)
 end
 
 function ReadableVariable(x::Variable)
@@ -74,7 +76,8 @@ function relu(a::Variable)
 end
 
 function sigmoid(a::Variable)
-    result = Variable(1.0 / (1.0 + exp(-a.value)), :sigmoid)
+    value = 1.0 / (1.0 + exp(-a.value))
+    result = Variable(value, :sigmoid)
     push!(result.parents, a)
     return result
 end
@@ -101,6 +104,18 @@ function zero_grad!(a::Vector{Variable})
     for v in a
         zero_grad!(v)
     end
+end
+
+function min(a::Variable, b::Variable)
+    result = Variable(min(a.value, b.value), :min)
+    push!(result.parents, (a, b))
+    return result
+end
+
+function max(a::Variable, b::Variable)
+    result = Variable(max(a.value, b.value), :max)
+    push!(result.parents, (a, b))
+    return result
 end
 
 function zero_grad!(a::Matrix{Variable})
@@ -132,7 +147,7 @@ function print_gradients(v::Variable, visited::Set{Variable}=Set{Variable}())
 end
 
 function backward(v::Variable, visited::Set{Variable}=Set{Variable}())
-    if v in visited && all(parent in visited for parent in v.parents)
+    if v in visited
         return
     end
 
@@ -147,12 +162,10 @@ function backward(v::Variable, visited::Set{Variable}=Set{Variable}())
             a, b = parent
             if a !== nothing
                 a.grad += v.grad * 1
-                push!(visited, a)
                 backward(a, visited)
             end
             if b !== nothing
                 b.grad += v.grad * 1
-                push!(visited, b)
                 backward(b, visited)
             end
 
@@ -160,12 +173,10 @@ function backward(v::Variable, visited::Set{Variable}=Set{Variable}())
             a, b = parent
             if a !== nothing
                 a.grad += v.grad * 1
-                push!(visited, a)
                 backward(a, visited)
             end
             if b !== nothing
                 b.grad += v.grad * -1
-                push!(visited, b)
                 backward(b, visited)
             end
 
@@ -173,12 +184,10 @@ function backward(v::Variable, visited::Set{Variable}=Set{Variable}())
             a, b = parent
             if a !== nothing
                 a.grad += v.grad * b.value
-                push!(visited, a)
                 backward(a, visited)
             end
             if b !== nothing
                 b.grad += v.grad * a.value
-                push!(visited, b)
                 backward(b, visited)
             end
 
@@ -186,7 +195,6 @@ function backward(v::Variable, visited::Set{Variable}=Set{Variable}())
             a = parent
             if a !== nothing
                 a.grad += v.grad * (1 / a.value)
-                push!(visited, a)
                 backward(a, visited)
             end
 
@@ -194,7 +202,6 @@ function backward(v::Variable, visited::Set{Variable}=Set{Variable}())
             a = parent
             if a !== nothing
                 a.grad += v.grad * exp(a.value)
-                push!(visited, a)
                 backward(a, visited)
             end
 
@@ -202,7 +209,6 @@ function backward(v::Variable, visited::Set{Variable}=Set{Variable}())
             a = parent
             if a !== nothing
                 a.grad += v.grad * (a.value > 0.0 ? 1.0 : 0.0)
-                push!(visited, a)
                 backward(a, visited)
             end
 
@@ -210,7 +216,6 @@ function backward(v::Variable, visited::Set{Variable}=Set{Variable}())
             a = parent
             if a !== nothing
                 a.grad += v.grad * (v.value * (1.0 - v.value))
-                push!(visited, a)
                 backward(a, visited)
             end
 
@@ -218,7 +223,6 @@ function backward(v::Variable, visited::Set{Variable}=Set{Variable}())
             a = parent
             if a !== nothing
                 a.grad += v.grad * (1 - tanh(a.value)^2)
-                push!(visited, a)
                 backward(a, visited)
             end
 
@@ -226,12 +230,32 @@ function backward(v::Variable, visited::Set{Variable}=Set{Variable}())
             a, b = parent
             if a !== nothing
                 a.grad += v.grad * (1.0 / b.value)
-                push!(visited, a)
                 backward(a, visited)
             end
             if b !== nothing
                 b.grad += v.grad * (-a.value / (b.value^2))
-                push!(visited, b)
+                backward(b, visited)
+            end
+        
+        elseif v.op_type == :min
+            a, b = parent
+            if a !== nothing && a.value <= b.value
+                a.grad += v.grad
+                backward(a, visited)
+            end
+            if b !== nothing && b.value < a.value
+                b.grad += v.grad
+                backward(b, visited)
+            end
+        
+        elseif v.op_type == :max
+            a, b = parent
+            if a !== nothing && a.value >= b.value
+                a.grad += v.grad
+                backward(a, visited)
+            end
+            if b !== nothing && b.value > a.value
+                b.grad += v.grad
                 backward(b, visited)
             end
         end

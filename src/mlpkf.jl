@@ -1,10 +1,10 @@
 module Mlpkf
 
 include("autodiffkf.jl")
-using .Autodiffkf: Variable, +, -, *, /, exp, log, relu, sigmoid, tanh, softmax, zero_grad!, backward, print_gradients
+using .Autodiffkf: Variable, +, -, *, /, exp, log, relu, sigmoid, tanh, softmax, zero_grad!, backward, print_gradients, min, max
 
 export Linear, Chain, Dataset, train_epoch, predict_dataset, initialize_data, mse_loss, sgd
-export exp, log, relu, sigmoid, tanh, softmax
+export exp, log, relu, sigmoid, tanh, softmax, binary_crossentropy, adam
 
 mutable struct Linear
     input_size::Int
@@ -111,7 +111,12 @@ function Linear(input_size::Int, output_size::Int)
 end
 
 function Linear(input_size::Int, output_size::Int, activation::Function)
-    weights = [Variable(randn() * sqrt(2 / (input_size + output_size))) for i in 1:output_size, j in 1:input_size]    
+    weights = []
+    if activation == relu
+        weights = [Variable(randn() * sqrt(2 / (input_size + output_size))) for i in 1:output_size, j in 1:input_size]
+    elseif activation == sigmoid || activation == tanh
+        weights = [Variable(randn() * sqrt(1 / input_size)) for i in 1:output_size, j in 1:input_size]
+    end
     bias = [Variable(0.0) for _ in 1:output_size]
     return Linear(input_size, output_size, weights, bias, activation)
 end
@@ -149,6 +154,16 @@ function mse_loss(pred::Vector{Variable}, target::Variable)
     return loss
 end
 
+function binary_crossentropy(pred::Vector{Variable}, target::Variable)::Variable
+    epsilon = Variable(1e-12)
+    loss = Variable(0.0)
+    for p in pred
+        clipped_pred = max(min(p, Variable(1.0) - epsilon), epsilon)
+        loss = loss - (target * log(clipped_pred) + (Variable(1.0) - target) * log(Variable(1.0) - clipped_pred))
+    end
+    return loss
+end
+
 function sgd(model::Chain, learning_rate::Float64)
     for layer in model.hidden_layers
         for w in layer.weights
@@ -163,6 +178,49 @@ function sgd(model::Chain, learning_rate::Float64)
     end
     for b in model.output_layer.bias
         b.value -= learning_rate * b.grad
+    end
+end
+
+function adam(model::Chain, learning_rate::Float64, beta1::Float64 = 0.9, beta2::Float64 = 0.999, epsilon::Float64 = 1e-8, t::Int = 1)
+    for layer in model.hidden_layers
+        for w in layer.weights
+            w.m = beta1 * w.m + (1 - beta1) * w.grad
+            w.v = beta2 * w.v + (1 - beta2) * w.grad^2
+
+            m_hat = w.m / (1 - beta1^t)
+            v_hat = w.v / (1 - beta2^t)
+
+            w.value -= learning_rate * m_hat / (sqrt(v_hat) + epsilon)
+        end
+        for b in layer.bias
+            b.m = beta1 * b.m + (1 - beta1) * b.grad
+            b.v = beta2 * b.v + (1 - beta2) * b.grad^2
+
+            m_hat = b.m / (1 - beta1^t)
+            v_hat = b.v / (1 - beta2^t)
+
+            b.value -= learning_rate * m_hat / (sqrt(v_hat) + epsilon)
+        end
+    end
+
+    for w in model.output_layer.weights
+        w.m = beta1 * w.m + (1 - beta1) * w.grad
+        w.v = beta2 * w.v + (1 - beta2) * w.grad^2
+
+        m_hat = w.m / (1 - beta1^t)
+        v_hat = w.v / (1 - beta2^t)
+
+        w.value -= learning_rate * m_hat / (sqrt(v_hat) + epsilon)
+    end
+
+    for b in model.output_layer.bias
+        b.m = beta1 * b.m + (1 - beta1) * b.grad
+        b.v = beta2 * b.v + (1 - beta2) * b.grad^2
+
+        m_hat = b.m / (1 - beta1^t)
+        v_hat = b.v / (1 - beta2^t)
+
+        b.value -= learning_rate * m_hat / (sqrt(v_hat) + epsilon)
     end
 end
 

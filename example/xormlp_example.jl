@@ -1,6 +1,6 @@
 include("../src/Mlpkf.jl")
-using .Mlpkf: Linear, Chain, Dataset, train_epoch, predict_dataset, initialize_data, mse_loss, sgd
-using .Mlpkf: exp, log, relu, sigmoid, tanh, softmax
+using .Mlpkf: Linear, Chain, Dataset, train_epoch, predict_dataset, initialize_data, mse_loss, sgd, binary_crossentropy
+using .Mlpkf: exp, log, relu, sigmoid, tanh, softmax, adam
 
 # Dane wejściowe XOR
 X = [
@@ -18,12 +18,11 @@ model = Chain(
     Linear(2, 1, sigmoid)
 )
 
-epochs = 500
-learning_rate = 0.1
+epochs = 1000
+learning_rate = 0.01
 
 for epoch in 1:epochs
-    loss = train_epoch(dataset, model, mse_loss, sgd, learning_rate)
-    println("Epoch $epoch: Loss = $loss")
+    loss = train_epoch(dataset, model, binary_crossentropy, adam, learning_rate)
 end
 
 println("\nTestowanie modelu:")
